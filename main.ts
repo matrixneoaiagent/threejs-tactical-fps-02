@@ -5,10 +5,15 @@ import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { buildDossier } from './vendor/makefun-threejs.ts';
 
-const outDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
+let outDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 const rootDir = process.cwd();
 
-mkdirSync(outDir, { recursive: true });
+try {
+  mkdirSync(outDir, { recursive: true });
+} catch {
+  outDir = resolve('out');
+  mkdirSync(outDir, { recursive: true });
+}
 
 cpSync(join(rootDir, 'game'), join(outDir, 'game'), { recursive: true });
 cpSync(join(rootDir, 'screenshots'), join(outDir, 'screenshots'), { recursive: true });

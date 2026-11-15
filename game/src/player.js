@@ -6,6 +6,17 @@ export function createPlayer(colliders) {
   const EYE_CROUCH = 1.05;
   const PLAYER_RADIUS = 0.45;
   const PLAYER_HEIGHT = 1.8;
+  const CROUCH_HEIGHT = 1.2;
+  const MOUSE_SENS = 0.0022;
+  const PITCH_CLAMP = 1.45;
+  const MAX_STAND_SPEED = 5.8;
+  const MAX_CROUCH_SPEED = 2.8;
+  const ACCEL_GROUND = 45;
+  const ACCEL_CROUCH = 25;
+  const ACCEL_AIR = 8;
+  const FRICTION = 12;
+  const JUMP_VELOCITY = 5.2;
+  const GRAVITY = 18.0;
 
   const state = {
     position: new THREE.Vector3(0, 0, -26), // Defender spawn
@@ -30,10 +41,9 @@ export function createPlayer(colliders) {
 
   function look(dx, dy) {
     if (!state.alive) return;
-    const SENS = 0.0022;
-    state.yaw -= dx * SENS;
-    state.pitch -= dy * SENS;
-    state.pitch = Math.max(-1.45, Math.min(1.45, state.pitch));
+    state.yaw -= dx * MOUSE_SENS;
+    state.pitch -= dy * MOUSE_SENS;
+    state.pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, state.pitch));
   }
 
   function addRecoil(pitchKick, yawKick) {
@@ -61,23 +71,25 @@ export function createPlayer(colliders) {
   }
 
   function checkCollision(pos) {
-    const minH = state.isCrouching ? 1.2 : PLAYER_HEIGHT;
+    const minH = state.isCrouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
     tempBox.min.set(pos.x - PLAYER_RADIUS, pos.y, pos.z - PLAYER_RADIUS);
     tempBox.max.set(pos.x + PLAYER_RADIUS, pos.y + minH, pos.z + PLAYER_RADIUS);
 
-    for (let i = 0; i < colliders.length; i += 1) {
-      if (tempBox.intersectsBox(colliders[i])) return true;
+    if (colliders && colliders.length > 0) {
+      for (let i = 0; i < colliders.length; i += 1) {
+        if (tempBox.intersectsBox(colliders[i])) return true;
+      }
     }
     return false;
   }
 
   function step(dt, keys) {
-    // Crouch interpolation
-    state.isCrouching = keys.has('ControlLeft') || keys.has('KeyC');
-    state.targetEyeHeight = state.isCrouching ? EYE_CROUCH : EYE_STAND;
+    // Crouch input & smooth eye height interpolation
+    state.isCrouching = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
+    state.targetEyeHeight = state.alive ? (state.isCrouching ? EYE_CROUCH : EYE_STAND) : 0.3;
     state.eyeHeight += (state.targetEyeHeight - state.eyeHeight) * Math.min(1, dt * 14);
 
-    // Recoil recovery spring
+    // Dynamic recoil spring recovery
     state.recoilPitch += (state.targetRecoilPitch - state.recoilPitch) * Math.min(1, dt * 25);
     state.recoilYaw += (state.targetRecoilYaw - state.recoilYaw) * Math.min(1, dt * 25);
     state.targetRecoilPitch *= Math.max(0, 1 - dt * 10);
@@ -94,8 +106,8 @@ export function createPlayer(colliders) {
     if (keys.has('KeyA')) moveVec.x -= 1;
     if (keys.has('KeyD')) moveVec.x += 1;
 
-    const maxSpeed = state.isCrouching ? 2.8 : 5.8;
-    const accel = state.isGrounded ? (state.isCrouching ? 25 : 45) : 8;
+    const maxSpeed = state.isCrouching ? MAX_CROUCH_SPEED : MAX_STAND_SPEED;
+    const accel = state.isGrounded ? (state.isCrouching ? ACCEL_CROUCH : ACCEL_GROUND) : ACCEL_AIR;
 
     if (moveVec.lengthSq() > 0) {
       moveVec.normalize();
@@ -115,19 +127,18 @@ export function createPlayer(colliders) {
         state.velocity.z *= scale;
       }
     } else if (state.isGrounded) {
-      // Ground friction
-      const friction = 12;
-      const drop = friction * dt;
+      // Ground friction damping
+      const drop = FRICTION * dt;
       state.velocity.x *= Math.max(0, 1 - drop);
       state.velocity.z *= Math.max(0, 1 - drop);
     }
 
     // Jump & Gravity
     if (keys.has('Space') && state.isGrounded && !state.isCrouching) {
-      state.velocity.y = 5.2;
+      state.velocity.y = JUMP_VELOCITY;
       state.isGrounded = false;
     }
-    state.velocity.y -= 18.0 * dt; // Gravity
+    state.velocity.y -= GRAVITY * dt;
 
     // Resolve X motion with wall sliding
     const nextX = state.position.clone();
@@ -147,7 +158,7 @@ export function createPlayer(colliders) {
       state.velocity.z = 0;
     }
 
-    // Resolve Y motion
+    // Resolve Y motion & ground clamping
     state.position.y += state.velocity.y * dt;
     if (state.position.y <= 0) {
       state.position.y = 0;
@@ -165,7 +176,12 @@ export function createPlayer(colliders) {
     state.recoilYaw = 0;
     state.targetRecoilPitch = 0;
     state.targetRecoilYaw = 0;
+    state.eyeHeight = EYE_STAND;
+    state.targetEyeHeight = EYE_STAND;
+    state.isGrounded = true;
+    state.isCrouching = false;
     state.hp = 100;
+    state.armor = 100;
     state.alive = true;
   }
 
