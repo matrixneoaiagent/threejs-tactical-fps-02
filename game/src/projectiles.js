@@ -1,143 +1,168 @@
-// projectiles.js: Tactical grenades (Frag and Smoke) with bounce physics and detonation effects
 import * as THREE from 'three';
-import { PALETTE } from './palette.js';
 import { audio } from './audio.js';
 
-export function createProjectileSystem(scene, colliders) {
-  const activeGrenades = [];
-  const activeSmokes = [];
+export function createProjectileSystem(scene, colliders = []) {
+  const grenades = [];
+  const clouds = [];
+  const tempBox = new THREE.Box3();
 
-  const fragGeo = new THREE.DodecahedronGeometry(0.12);
-  const fragMat = new THREE.MeshStandardMaterial({ color: 0x2e382b, roughness: 0.5, metalness: 0.6 });
-
-  const smokeGeo = new THREE.SphereGeometry(3.6, 16, 16);
-  const smokeMat = new THREE.MeshBasicMaterial({
-    color: PALETTE.smokeGrey,
-    transparent: true,
-    opacity: 0.75,
-    depthWrite: false,
-  });
+  function checkCollision(pos) {
+    tempBox.min.set(pos.x - 0.12, pos.y - 0.12, pos.z - 0.12);
+    tempBox.max.set(pos.x + 0.12, pos.y + 0.12, pos.z + 0.12);
+    for (let i = 0; i < colliders.length; i += 1) {
+      if (tempBox.intersectsBox(colliders[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   function throwGrenade(origin, direction, type = 'frag') {
-    const mesh = new THREE.Mesh(fragGeo, fragMat);
-    mesh.position.copy(origin);
+    const geo = new THREE.SphereGeometry(0.12, 10, 10);
+    const mat = new THREE.MeshStandardMaterial({
+      color: type === 'frag' ? 0x3d5a35 : 0x64748b,
+      roughness: 0.5,
+      metalness: 0.4,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    const spawnPos = origin.clone().addScaledVector(direction, 0.4);
+    mesh.position.copy(spawnPos);
     mesh.castShadow = true;
     scene.add(mesh);
 
-    const speed = 18;
-    const grenade = {
-      mesh,
-      type,
-      position: mesh.position,
-      velocity: direction.clone().multiplyScalar(speed).add(new THREE.Vector3(0, 3, 0)),
-      timer: 1.8,
-      bounces: 0,
-      radius: 0.15,
-    };
-    activeGrenades.push(grenade);
-  }
+    const velocity = direction.clone().multiplyScalar(17).add(new THREE.Vector3(0, 3.5, 0));
 
-  function deploySmoke(pos) {
-    const mesh = new THREE.Mesh(smokeGeo, smokeMat);
-    mesh.position.copy(pos);
-    mesh.position.y = 2.0;
-    scene.add(mesh);
-    activeSmokes.push({
+    grenades.push({
       mesh,
-      position: mesh.position,
-      radius: 3.6,
-      timer: 14.0, // 14s smoke duration
+      velocity,
+      type,
+      fuse: 2.5,
     });
   }
 
-  function checkCollision(pos, radius) {
-    const box = new THREE.Box3(
-      new THREE.Vector3(pos.x - radius, pos.y - radius, pos.z - radius),
-      new THREE.Vector3(pos.x + radius, pos.y + radius, pos.z + radius)
-    );
-    for (let i = 0; i < colliders.length; i += 1) {
-      if (box.intersectsBox(colliders[i])) return colliders[i];
-    }
-    return null;
-  }
+  function step(dt, bots = [], player = null, onExplode = null) {
+    // Step grenades
+    for (let i = grenades.length - 1; i >= 0; i -= 1) {
+      const g = grenades[i];
+      g.fuse -= dt;
+      g.velocity.y -= 18.0 * dt;
 
-  function step(dt, bots, player, onGrenadeExplode) {
-    for (let i = activeGrenades.length - 1; i >= 0; i -= 1) {
-      const g = activeGrenades[i];
-      g.timer -= dt;
+      // X motion
+      const nextX = g.mesh.position.clone();
+      nextX.x += g.velocity.x * dt;
+      if (!checkCollision(nextX)) {
+        g.mesh.position.x = nextX.x;
+      } else {
+        g.velocity.x *= -0.55;
+      }
 
-      // Gravity
-      g.velocity.y -= 19.6 * dt;
+      // Z motion
+      const nextZ = g.mesh.position.clone();
+      nextZ.z += g.velocity.z * dt;
+      if (!checkCollision(nextZ)) {
+        g.mesh.position.z = nextZ.z;
+      } else {
+        g.velocity.z *= -0.55;
+      }
 
-      // Next position
-      const nextPos = g.position.clone().addScaledVector(g.velocity, dt);
-
-      // Floor bounce
-      if (nextPos.y <= g.radius) {
-        nextPos.y = g.radius;
-        g.velocity.y = -g.velocity.y * 0.45;
+      // Y motion
+      g.mesh.position.y += g.velocity.y * dt;
+      if (g.mesh.position.y <= 0.12) {
+        g.mesh.position.y = 0.12;
+        g.velocity.y *= -0.45;
         g.velocity.x *= 0.75;
         g.velocity.z *= 0.75;
+      } else if (checkCollision(g.mesh.position)) {
+        g.velocity.y *= -0.45;
       }
 
-      // Wall collision bounce
-      const hitBox = checkCollision(nextPos, g.radius);
-      if (hitBox) {
-        g.velocity.x = -g.velocity.x * 0.5;
-        g.velocity.z = -g.velocity.z * 0.5;
-      } else {
-        g.position.copy(nextPos);
-      }
-
-      if (g.timer <= 0) {
-        // Detonate
+      // Detonation
+      if (g.fuse <= 0) {
+        const explodePos = g.mesh.position.clone();
         scene.remove(g.mesh);
-        activeGrenades.splice(i, 1);
+        grenades.splice(i, 1);
+
+        audio.playExplosion();
 
         if (g.type === 'frag') {
-          audio.playExplosion();
-          // AOE damage within 7m
-          const blastRadius = 7.0;
-          // Check player distance
-          const pDist = g.position.distanceTo(player.state.position);
-          if (pDist < blastRadius) {
-            const dmg = Math.round(85 * (1 - pDist / blastRadius));
-            player.applyDamage(dmg);
-          }
-          // Check bots distance
-          for (let b = 0; b < bots.length; b += 1) {
-            if (!bots[b].alive) continue;
-            const bDist = g.position.distanceTo(bots[b].position);
-            if (bDist < blastRadius) {
-              const dmg = Math.round(95 * (1 - bDist / blastRadius));
-              bots[b].applyDamage(dmg, 'torso');
+          const RADIUS = 7.0;
+          const MAX_DMG = 85;
+
+          if (player && player.state && player.state.alive) {
+            const distP = explodePos.distanceTo(player.state.position);
+            if (distP < RADIUS) {
+              const dmg = Math.round((1 - distP / RADIUS) * MAX_DMG);
+              player.applyDamage(dmg);
             }
           }
-          if (onGrenadeExplode) onGrenadeExplode(g.position);
+
+          for (let b = 0; b < bots.length; b += 1) {
+            const bot = bots[b];
+            if (bot && bot.alive) {
+              const distB = explodePos.distanceTo(bot.position);
+              if (distB < RADIUS) {
+                const dmg = Math.round((1 - distB / RADIUS) * MAX_DMG);
+                bot.applyDamage(dmg, 'torso');
+              }
+            }
+          }
         } else if (g.type === 'smoke') {
-          deploySmoke(g.position);
+          const cloudRadius = 4.4;
+          const cloudGeo = new THREE.SphereGeometry(cloudRadius, 14, 14);
+          const cloudMat = new THREE.MeshStandardMaterial({
+            color: 0x94a3b8,
+            transparent: true,
+            opacity: 0.85,
+            roughness: 0.9,
+            depthWrite: false,
+          });
+          const cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
+          cloudMesh.position.set(explodePos.x, Math.max(1.4, explodePos.y), explodePos.z);
+          scene.add(cloudMesh);
+
+          clouds.push({
+            mesh: cloudMesh,
+            position: cloudMesh.position.clone(),
+            radius: cloudRadius,
+            life: 14.0,
+            maxLife: 14.0,
+          });
+        }
+
+        if (typeof onExplode === 'function') {
+          onExplode(explodePos);
         }
       }
     }
 
-    // Step active smoke clouds
-    for (let s = activeSmokes.length - 1; s >= 0; s -= 1) {
-      const smk = activeSmokes[s];
-      smk.timer -= dt;
-      if (smk.timer <= 0) {
-        scene.remove(smk.mesh);
-        activeSmokes.splice(s, 1);
+    // Step smoke clouds
+    for (let c = clouds.length - 1; c >= 0; c -= 1) {
+      const cloud = clouds[c];
+      cloud.life -= dt;
+      if (cloud.life <= 2.5) {
+        cloud.mesh.material.opacity = Math.max(0, (cloud.life / 2.5) * 0.85);
+      }
+      if (cloud.life <= 0) {
+        scene.remove(cloud.mesh);
+        clouds.splice(c, 1);
       }
     }
   }
 
-  function isLineBlockedBySmoke(from, to) {
-    const line = new THREE.Line3(from, to);
-    for (let i = 0; i < activeSmokes.length; i += 1) {
-      const s = activeSmokes[i];
-      const closestPoint = new THREE.Vector3();
-      line.closestPointToPoint(s.position, true, closestPoint);
-      if (closestPoint.distanceTo(s.position) < s.radius * 0.9) {
+  function isLineBlockedBySmoke(p1, p2) {
+    if (clouds.length === 0) return false;
+    const seg = new THREE.Vector3().subVectors(p2, p1);
+    const segLenSq = seg.lengthSq();
+
+    for (let i = 0; i < clouds.length; i += 1) {
+      const cloud = clouds[i];
+      if (segLenSq === 0) {
+        if (p1.distanceTo(cloud.position) < cloud.radius) return true;
+        continue;
+      }
+      const t = Math.max(0, Math.min(1, new THREE.Vector3().subVectors(cloud.position, p1).dot(seg) / segLenSq));
+      const proj = new THREE.Vector3().copy(p1).addScaledVector(seg, t);
+      if (proj.distanceTo(cloud.position) < cloud.radius) {
         return true;
       }
     }
@@ -145,10 +170,15 @@ export function createProjectileSystem(scene, colliders) {
   }
 
   function reset() {
-    for (let i = 0; i < activeGrenades.length; i += 1) scene.remove(activeGrenades[i].mesh);
-    activeGrenades.length = 0;
-    for (let s = 0; s < activeSmokes.length; s += 1) scene.remove(activeSmokes[s].mesh);
-    activeSmokes.length = 0;
+    for (let i = 0; i < grenades.length; i += 1) {
+      scene.remove(grenades[i].mesh);
+    }
+    grenades.length = 0;
+
+    for (let i = 0; i < clouds.length; i += 1) {
+      scene.remove(clouds[i].mesh);
+    }
+    clouds.length = 0;
   }
 
   return {

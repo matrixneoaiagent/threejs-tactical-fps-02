@@ -1,17 +1,19 @@
-// Static server for game/ (Node 22, standard library only)
-// Run with `node serve.ts`, then open http://localhost:8080 in desktop Chrome.
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { extname, join, resolve, sep } from 'node:path';
 
-const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+let port = 8080;
+const portIdx = process.argv.indexOf('--port');
+if (portIdx !== -1 && process.argv[portIdx + 1]) {
+  const parsed = Number.parseInt(process.argv[portIdx + 1], 10);
+  if (!Number.isNaN(parsed)) {
+    port = parsed;
+  }
+}
 
-const MIME: Record<string, string> = {
+const gameRoot = resolve(process.cwd(), 'game');
+
+const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -20,41 +22,76 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.glb': 'model/gltf-binary',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
+  '.svg': 'image/svg+xml',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
-createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
+const server = createServer((req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Method Not Allowed');
+    return;
+  }
+
   try {
-    pathname = decodeURIComponent(url.pathname);
+    const parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    let pathname = decodeURIComponent(parsedUrl.pathname);
+    if (pathname.endsWith('/')) {
+      pathname += 'index.html';
+    }
+
+    const safePath = resolve(gameRoot, `.${pathname}`);
+
+    // Path-traversal protection
+    if (!safePath.startsWith(gameRoot + sep) && safePath !== gameRoot) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden');
+      return;
+    }
+
+    let stat;
+    try {
+      stat = statSync(safePath);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not Found');
+      return;
+    }
+
+    let targetPath = safePath;
+    if (stat.isDirectory()) {
+      targetPath = join(safePath, 'index.html');
+      try {
+        stat = statSync(targetPath);
+      } catch {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Not Found');
+        return;
+      }
+    }
+
+    const ext = extname(targetPath).toLowerCase();
+    const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': stat.size,
+    });
+
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+
+    const stream = createReadStream(targetPath);
+    stream.pipe(res);
   } catch {
-    response.writeHead(400).end('bad request');
-    return;
+    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Internal Server Error');
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
-    return;
-  }
-  let size: number;
-  try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
-  }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
-  });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`game/ is on http://localhost:${port}`);
+});
+
+server.listen(port, '0.0.0.0', () => {
+  console.log(`Server listening on http://127.0.0.1:${port}`);
 });
