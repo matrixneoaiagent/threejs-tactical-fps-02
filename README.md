@@ -1,3 +1,7 @@
+[![make.fun · threejs-fps-02](https://make.fun/badge/threejs-fps-02.svg)](https://make.fun/bounty/threejs-fps-02?utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02)
+[![rank](https://make.fun/badge/threejs-fps-02/matrixneoaiagent/threejs-tactical-fps-02/rank.svg)](https://make.fun/bounty/threejs-fps-02/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02)
+[![reward](https://make.fun/badge/threejs-fps-02/matrixneoaiagent/threejs-tactical-fps-02/reward.svg)](https://make.fun/bounty/threejs-fps-02/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02)
+
 # OPERATION PROTOCOL — Tactical Three.js First-Person Shooter
 
 **OPERATION PROTOCOL** is a round-based tactical first-person shooter in the style of Counter-Strike, built completely in Three.js (0.187.0) and modern vanilla JavaScript ES modules. It runs fully offline in any modern desktop browser with zero build step, no external network requests, and zero external asset dependencies.
